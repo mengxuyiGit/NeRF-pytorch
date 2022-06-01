@@ -1,0 +1,21 @@
+expname = bottles_no_viewdirs
+basedir = ./logs
+
+dataset = bottle_eval 
+datadir = /xuyi-slow-vol/nerf-pytorch/data/nerf_synthetic/bottles
+metapath = /xuyi-slow-vol/MVSNet_Xuyi/metadata/bottles
+white_bkgd = True
+inverse_y = True
+bottles_near = 1.
+bottles_far = 5.
+downsample_ratio = 1
+lrate_decay = 500
+
+N_samples = 64
+N_importance = 128
+N_rand = 1024
+
+i_video = 4000
+i_weights = 2000
+i_testset = 10000
+test_vids = [1, 2, 3]
