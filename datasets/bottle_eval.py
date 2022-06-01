@@ -97,7 +97,7 @@ class MVSDataset(Dataset):
         counts = [0]
         print('Loading poses and rgb ...')
         for scan in ['0_train', '1_val']:
-            for vid in range(3): # view_ids -> all views
+            for vid in range(100): # view_ids -> all views
                 img_filename = os.path.join(datapath, 'rgb/{}_{:0>4}.png'.format(scan,vid))
                 pose_filename = os.path.join(datapath, 'pose/{}_{:0>4}.txt'.format(scan,vid))
 
@@ -113,12 +113,13 @@ class MVSDataset(Dataset):
         for scan in ['2_test']:
             for vid in args.test_vids:
                 pose_filename = os.path.join(datapath, 'pose/{}_{:0>4}.txt'.format(scan,vid))
+                print(pose_filename)
                 intrinsics, extrinsics, poses = self.read_pose_file(pose_filename)
                 intrinsics_list.append(intrinsics)
                 extrinsics_list.append(extrinsics)
                 poses_list.append(poses)
             counts.append(len(poses_list))
-
+        # st()
         print('Loading poses and rgb finished!')
 
         imgs = np.stack(imgs)

@@ -61,6 +61,10 @@ def config_parser():
     parser.add_argument("--ft_path", type=str, default=None, 
                         help='specific weights npy file to reload for coarse network')
 
+    # inference mode
+    parser.add_argument("--inference_mode", type=bool, default=False, 
+                        help='directly do inference')
+    
     # rendering options
     parser.add_argument("--N_samples", type=int, default=64, 
                         help='number of coarse samples per ray')
@@ -204,7 +208,19 @@ def train():
     # Move testing data to GPU
     render_poses = torch.Tensor(render_poses).to(device)
 
-    # Short circuit if only rendering out from trained model
+    # Directly do inference on test views
+    if args.inference_mode:
+        print('Inference only')
+        with torch.no_grad():
+            inference_savedir = os.path.join(basedir, expname, 'inference_{}_{:06d}'.format('2_test' if args.render_test else 'path', start))
+            os.makedirs(inference_savedir, exist_ok=True)
+            print('inference poses ', args.test_vids)
+            with torch.no_grad():
+                st()
+                render_path(torch.Tensor(poses[i_test]).to(device), hwf, K, args.chunk, render_kwargs_test, gt_imgs=None, savedir=inference_savedir,
+                test_vids=args.test_vids)
+            print('Saved inference results')
+            return
     
     # Prepare raybatch tensor if batching random rays
     N_rand = args.N_rand
@@ -263,8 +279,7 @@ def train():
 
         loss.backward()
         optimizer.step()
-
-        # NOTE: IMPORTANT!
+        
         ###   update learning rate   ###
         decay_rate = 0.1
         decay_steps = args.lrate_decay * 1000
@@ -309,7 +324,7 @@ def train():
             os.makedirs(testsavedir, exist_ok=True)
             print('test poses shape', poses[i_test].shape)
             with torch.no_grad():
-                render_path(torch.Tensor(poses[i_test]).to(device), hwf, K, args.chunk, render_kwargs_test, gt_imgs=images[i_test], savedir=testsavedir)
+                render_path(torch.Tensor(poses[i_test]).to(device), hwf, K, args.chunk, render_kwargs_test, gt_imgs=None, savedir=testsavedir)
             print('Saved test set')
 
         if i%args.i_print==0:
