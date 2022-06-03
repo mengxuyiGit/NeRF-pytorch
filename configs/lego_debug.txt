@@ -1,4 +1,4 @@
-expname = blender_paper_lego
+expname = lego_530_full_res
 basedir = ./logs
 datadir = ./data/nerf_synthetic/lego
 dataset_type = blender
@@ -16,5 +16,6 @@ N_rand = 1024
 precrop_iters = 500
 precrop_frac = 0.5
 
-half_res = True
-i_video = 100
+half_res = False
+i_video = 5000
+i_weights = 5000

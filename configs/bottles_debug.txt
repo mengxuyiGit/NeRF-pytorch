@@ -1,0 +1,32 @@
+expname = bottles_debug_200imgs_train100val50
+basedir = ./logs
+datadir = ./data/nerf_synthetic/bottles
+dataset_type = bottles
+
+no_batching = True
+
+use_viewdirs = True
+white_bkgd = True
+lrate_decay = 500
+
+N_samples = 64
+N_importance = 128
+N_rand = 1024
+
+precrop_iters = 500
+precrop_frac = 0.5
+
+half_res = True
+
+i_video = 10000
+i_weights = 10000
+
+bottles_near = 1.
+bottles_far = 5.
+dataset = bottle_eval 
+metapath = /xuyi-slow-vol/MVSNet_Xuyi/metadata/bottles
+testpath = /xuyi-slow-vol/nerf-pytorch/data/nerf_synthetic/bottles
+testlist = /xuyi-slow-vol/MVSNet_Xuyi/metadata/bottles/test.txt
+numdepth = 384
+interval_scale = 0.01 
+depth_min = 1.5

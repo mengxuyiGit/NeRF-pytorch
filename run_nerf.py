@@ -12,17 +12,24 @@ from tqdm import tqdm, trange
 import matplotlib.pyplot as plt
 
 from run_nerf_helpers import *
+# from render_utils import *
 
 from load_llff import load_llff_data
 from load_deepvoxels import load_dv_data
 from load_blender import load_blender_data
 from load_LINEMOD import load_LINEMOD_data
 
+from ipdb import set_trace as st
+from PIL import Image
+from torchvision.utils import save_image
+
+# mvs
+from datasets import find_dataset_def
+
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 np.random.seed(0)
 DEBUG = False
-
 
 def batchify(fn, chunk):
     """Constructs a version of 'fn' that applies to smaller batches.
@@ -92,11 +99,13 @@ def render(H, W, K, chunk=1024*32, rays=None, c2w=None, ndc=True,
       acc_map: [batch_size]. Accumulated opacity (alpha) along a ray.
       extras: dict with everything returned by render_rays().
     """
+    
     if c2w is not None:
         # special case to render full image
-        rays_o, rays_d = get_rays(H, W, K, c2w)
+        rays_o, rays_d = get_rays(H, W, K, c2w, inverse_y=kwargs['inverse_y'])
     else:
         # use provided ray batch
+        # already using "get_rays", inverse_y flag is set
         rays_o, rays_d = rays
 
     if use_viewdirs:
@@ -104,7 +113,7 @@ def render(H, W, K, chunk=1024*32, rays=None, c2w=None, ndc=True,
         viewdirs = rays_d
         if c2w_staticcam is not None:
             # special case to visualize effect of viewdirs
-            rays_o, rays_d = get_rays(H, W, K, c2w_staticcam)
+            rays_o, rays_d = get_rays(H, W, K, c2w_staticcam, inverse_y=kwargs['inverse_y'])
         viewdirs = viewdirs / torch.norm(viewdirs, dim=-1, keepdim=True)
         viewdirs = torch.reshape(viewdirs, [-1,3]).float()
 
@@ -146,7 +155,7 @@ def render_path(render_poses, hwf, K, chunk, render_kwargs, gt_imgs=None, savedi
 
     rgbs = []
     disps = []
-
+    # st()
     t = time.time()
     for i, c2w in enumerate(tqdm(render_poses)):
         print(i, time.time() - t)
@@ -213,6 +222,7 @@ def create_nerf(args):
     ##########################
 
     # Load checkpoints
+    # st
     if args.ft_path is not None and args.ft_path!='None':
         ckpts = [args.ft_path]
     else:
@@ -244,6 +254,7 @@ def create_nerf(args):
         'use_viewdirs' : args.use_viewdirs,
         'white_bkgd' : args.white_bkgd,
         'raw_noise_std' : args.raw_noise_std,
+        'inverse_y':args.inverse_y,
     }
 
     # NDC only good for LLFF-style forward facing data
@@ -317,7 +328,8 @@ def render_rays(ray_batch,
                 white_bkgd=False,
                 raw_noise_std=0.,
                 verbose=False,
-                pytest=False):
+                pytest=False,
+                inverse_y=False):
     """Volumetric rendering.
     Args:
       ray_batch: array of shape [batch_size, ...]. All information necessary
@@ -359,8 +371,8 @@ def render_rays(ray_batch,
         z_vals = near * (1.-t_vals) + far * (t_vals)
     else:
         z_vals = 1./(1./near * (1.-t_vals) + 1./far * (t_vals))
-
-    z_vals = z_vals.expand([N_rays, N_samples])
+    # st()
+    z_vals = z_vals.expand([N_rays, N_samples]) # 1024, 64
 
     if perturb > 0.:
         # get intervals between samples
@@ -428,7 +440,7 @@ def config_parser():
                         help='experiment name')
     parser.add_argument("--basedir", type=str, default='./logs/', 
                         help='where to store ckpts and logs')
-    parser.add_argument("--datadir", type=str, default='./data/llff/fern', 
+    parser.add_argument("--datadir", type=str, default='./data/nerf_llff_data/fern', 
                         help='input data directory')
 
     # training options
@@ -528,6 +540,39 @@ def config_parser():
     parser.add_argument("--i_video",   type=int, default=50000, 
                         help='frequency of render_poses video saving')
 
+    # temp, for debug bottles dataset
+    parser.add_argument("--dataset",   type=str, default=None, 
+                        help='dataset')
+    parser.add_argument("--metapath",   type=str, default=None, 
+                        help='metapath')
+    parser.add_argument("--testpath",   type=str, default=None, 
+                        help='testpath')
+    parser.add_argument("--testlist",   type=str, default=None, 
+                        help='testlist')
+    parser.add_argument("--numdepth",   type=int, default=384, 
+                        help='numdepth')
+    parser.add_argument("--interval_scale",   type=float, default=0.01, 
+                        help='interval_scale')
+    parser.add_argument("--depth_min",   type=float, default=1.5, 
+                        help='depth_min')
+    parser.add_argument("--bottles_near",   type=float, default=0., 
+                        help='bottles_near')
+    parser.add_argument("--bottles_far",   type=float, default=6., 
+                        help='bottles_far')
+    parser.add_argument("--inverse_y",   type=bool, default=False, 
+                        help='up y')
+    parser.add_argument("--inverse_z",   type=bool, default=False, 
+                        help='forward z')
+    parser.add_argument("--read_pose_as_extrinsics",   type=bool, default=False, 
+                        help='bottles dataset uses read_pose_as_extrinsics')
+    parser.add_argument("--render_inverse_y",   type=bool, default=False, 
+                        help='to fit bottles dataset rendering')
+    parser.add_argument("--render_inverse_z",   type=bool, default=False, 
+                        help='to fit bottles dataset rendering')
+    parser.add_argument("--downsample_ratio",   type=int, default=1, 
+                        help='to speed up debugging')
+
+
     return parser
 
 
@@ -543,6 +588,7 @@ def train():
                                                                   recenter=True, bd_factor=.75,
                                                                   spherify=args.spherify)
         hwf = poses[0,:3,-1]
+        # st()
         poses = poses[:,:3,:4]
         print('Loaded llff', images.shape, render_poses.shape, hwf, args.datadir)
         if not isinstance(i_test, list):
@@ -568,16 +614,58 @@ def train():
 
     elif args.dataset_type == 'blender':
         images, poses, render_poses, hwf, i_split = load_blender_data(args.datadir, args.half_res, args.testskip)
-        print('Loaded blender', images.shape, render_poses.shape, hwf, args.datadir)
-        i_train, i_val, i_test = i_split
+        # numpy
+        # images(b,h,w,4), poses (b,4,4), render_poses(40,4,4), hwf:a list of 3 items[400,400,555],
+        # i_split: list of 3 items, each is an array of int]
+        # st() # check type and shapes
 
+        print('Loaded blender', images.shape, render_poses.shape, hwf, args.datadir, args.expname)
+        i_train, i_val, i_test = i_split
+        # st()
         near = 2.
         far = 6.
 
         if args.white_bkgd:
             images = images[...,:3]*images[...,-1:] + (1.-images[...,-1:])
         else:
+            st() # lego should no come into this
             images = images[...,:3]
+        print('Inverse_y is ', args.inverse_y)
+    
+    elif args.dataset_type == 'bottles':
+        # st()
+        MVSDataset = find_dataset_def(args.dataset)
+        test_dataset = MVSDataset(args.metapath, args.testpath, args.testlist, "test", 3, args.numdepth, args.interval_scale, args.depth_min)
+        # TestImgLoader = DataLoader(test_dataset, args.batch_size, shuffle=False, num_workers=4, drop_last=False)
+        # st()
+        # bottle_data_dict = test_dataset.load_bottle_data(args.testpath, half_res=args.half_res)
+        bottle_data_dict = test_dataset.load_bottle_data(args, args.testpath)
+
+        images = bottle_data_dict["imgs"]
+        if args.read_pose_as_extrinsics:
+            poses = bottle_data_dict["extrinsics"] 
+        else:
+            # st()
+            poses = bottle_data_dict["poses"]
+        render_poses = bottle_data_dict["render_poses"]
+        hwf = bottle_data_dict["hwf"]
+        i_split = bottle_data_dict["i_split"]
+        # st() # check type and shapes
+
+        if args.white_bkgd:
+            images = images[...,:3]*images[...,-1:] + (1.-images[...,-1:])
+        else:
+            st() # bottles should no come into this
+            images = images[...,:3]
+        
+        i_train, i_val, i_test = i_split
+
+        near = args.bottles_near
+        far = args.bottles_far # TODO: find near far for bottles, can try with the bbox.txt 
+        
+        print('Loaded bottles', images.shape, render_poses.shape, hwf, args.datadir, args.expname, near, far)
+        print('Inverse_y is ', args.inverse_y)
+        print('read_pose_as_extrinsics is ', args.read_pose_as_extrinsics)
 
     elif args.dataset_type == 'LINEMOD':
         images, poses, render_poses, hwf, K, i_split, near, far = load_LINEMOD_data(args.datadir, args.half_res, args.testskip)
@@ -606,7 +694,7 @@ def train():
     else:
         print('Unknown dataset type', args.dataset_type, 'exiting')
         return
-
+    
     # Cast intrinsics to right types
     H, W, focal = hwf
     H, W = int(H), int(W)
@@ -618,7 +706,7 @@ def train():
             [0, focal, 0.5*H],
             [0, 0, 1]
         ])
-
+   
     if args.render_test:
         render_poses = np.array(poses[i_test])
 
@@ -670,14 +758,14 @@ def train():
             imageio.mimwrite(os.path.join(testsavedir, 'video.mp4'), to8b(rgbs), fps=30, quality=8)
 
             return
-
+    # st()
     # Prepare raybatch tensor if batching random rays
     N_rand = args.N_rand
     use_batching = not args.no_batching
     if use_batching:
         # For random ray batching
         print('get rays')
-        rays = np.stack([get_rays_np(H, W, K, p) for p in poses[:,:3,:4]], 0) # [N, ro+rd, H, W, 3]
+        rays = np.stack([get_rays_np(H, W, K, p, inverse_y=args.inverse_y) for p in poses[:,:3,:4]], 0) # [N, ro+rd, H, W, 3]
         print('done, concats')
         rays_rgb = np.concatenate([rays, images[:,None]], 1) # [N, ro+rd+rgb, H, W, 3]
         rays_rgb = np.transpose(rays_rgb, [0,2,3,1,4]) # [N, H, W, ro+rd+rgb, 3]
@@ -733,7 +821,7 @@ def train():
             pose = poses[img_i, :3,:4]
 
             if N_rand is not None:
-                rays_o, rays_d = get_rays(H, W, K, torch.Tensor(pose))  # (H, W, 3), (H, W, 3)
+                rays_o, rays_d = get_rays(H, W, K, torch.Tensor(pose), inverse_y=args.inverse_y)  # (H, W, 3), (H, W, 3)
 
                 if i < args.precrop_iters:
                     dH = int(H//2 * args.precrop_frac)
@@ -763,6 +851,7 @@ def train():
 
         optimizer.zero_grad()
         img_loss = img2mse(rgb, target_s)
+
         trans = extras['raw'][...,-1]
         loss = img_loss
         psnr = mse2psnr(img_loss)
@@ -791,15 +880,27 @@ def train():
         # Rest is logging
         if i%args.i_weights==0:
             path = os.path.join(basedir, expname, '{:06d}.tar'.format(i))
-            torch.save({
-                'global_step': global_step,
-                'network_fn_state_dict': render_kwargs_train['network_fn'].state_dict(),
-                'network_fine_state_dict': render_kwargs_train['network_fine'].state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-            }, path)
-            print('Saved checkpoints at', path)
+            try:
+                torch.save({
+                    'global_step': global_step,
+                    'network_fn_state_dict': render_kwargs_train['network_fn'].state_dict(),
+                    'network_fine_state_dict': render_kwargs_train['network_fine'].state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                }, path)
+                print('Saved checkpoints at', path)
+            except:
+                torch.save({
+                    'global_step': global_step,
+                    'network_fn_state_dict': render_kwargs_train['network_fn'].state_dict(),
+                    'network_fine_state_dict': None, # incase of 0 N_importance
+                    'optimizer_state_dict': optimizer.state_dict(),
+                }, path)
+                print('Saved checkpoints at', path)
+
 
         if i%args.i_video==0 and i > 0:
+        
+            
             # Turn on testing mode
             with torch.no_grad():
                 rgbs, disps = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test)
@@ -816,6 +917,7 @@ def train():
             #     imageio.mimwrite(moviebase + 'rgb_still.mp4', to8b(rgbs_still), fps=30, quality=8)
 
         if i%args.i_testset==0 and i > 0:
+            st()
             testsavedir = os.path.join(basedir, expname, 'testset_{:06d}'.format(i))
             os.makedirs(testsavedir, exist_ok=True)
             print('test poses shape', poses[i_test].shape)
@@ -824,9 +926,32 @@ def train():
             print('Saved test set')
 
 
+
     
         if i%args.i_print==0:
             tqdm.write(f"[TRAIN] Iter: {i} Loss: {loss.item()}  PSNR: {psnr.item()}")
+
+        # TODO: save visual results for targets
+        # if i%args.i_img==0 and i>0:
+        # if True:
+        #     st()
+        #     rgb_img = rgb.reshape(H,W,3).cpu().detach().numpy()
+        #     img_cat = torch.cat((, target_s),-1)
+        #     img_file = os.path.join(basedir, expname, '{}_img_{:06d}.png'.format(expname, i))
+        #     save_image(img_cat, img_file)
+
+            # numpy method backoff
+            # data = np.random.random((100,100))
+            # #Rescale to 0-255 and convert to uint8
+            # rescaled = (255.0 / data.max() * (data - data.min())).astype(np.uint8)
+            # im = Image.fromarray(rescaled)
+            # im.save('test.png')
+
+
+        # def save_src_tgt_imgs(rgb, target_s):
+            
+
+
         """
             print(expname, i, psnr.numpy(), loss.numpy(), global_step.numpy())
             print('iter time {:.05f}'.format(dt))

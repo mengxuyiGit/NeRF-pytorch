@@ -3,7 +3,10 @@
 *.png
 *.mp4
 *.npy
+*.npz.*
 *.npz
+*.zip
 *.dae
 data/*
 logs/*
+**/__MACOSX/*
